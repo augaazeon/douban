@@ -1,51 +1,69 @@
-import re
 import requests
 from bs4 import BeautifulSoup
-import numpy as np
-import pandas as pd
-import urllib
-#Some User Agents
-hds=[{'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'},\
-{'User-Agent':'Mozilla/5.0 (Windows NT 6.2) AppleWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.12 Safari/535.11'},\
-{'User-Agent': 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)'}]
+from urllib.parse import quote
+import random
+import time
+import pymongo
+client = pymongo.MongoClient(host='127.0.0.1',port=27017)
+db = client['douban']
+collection = db['book']
+user_agents = [
+    'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6',
+    'Mozilla/5.0 (Windows NT 6.2) AppleWebKit/535.11 (KHTML, like Gecko) Chrome/17.0.963.12 Safari/535.11',
+    'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)'
+]
+headers = {
+    'User-Agent': random.choice(user_agents)
+}
+
+def get_items_page(keyword,page_num):
+    base_url = 'https://book.douban.com/tag/'
+    url = base_url + quote(keyword) + '/?start=' + str(page_num*20)
+    try:
+        response = requests.get(url,headers=headers)
+        if response.status_code == 200 :
+            print(response.status_code,response.url)
+            return response.text
+    except requests.ConnectionError:
+        print('请求失败')
+
+def parse_page(html):
+    soup = BeautifulSoup(html,'lxml')
+    for info in soup.select('.info'):
+        book_name = info.select('h2 a')[0]['title']
+        book_pub = info.select('.pub')[0].get_text().strip().replace(' ', '')
+        rating_people = info.select('.star .pl')[0].get_text().strip()
+        book_info = {
+            'book_name':book_name,
+            'book_pub':book_pub,
+            'rating_people':rating_people
+        }
+        yield book_info
+
+def save_data(book_info):
+    collection.insert(book_info)
 
 
+def main(keyword_list):
+    for keyword in keyword_list:
+        for page_num in range(0,50):
+            html = get_items_page(keyword,page_num)
+            time.sleep(2)
+            book_infos = parse_page(html)
+            for book_info in book_infos:
+                save_data(book_info)
+                print(book_info)
 
-def get_page(book_tag):
-    page_num = 0
-    book_lists  = []
-    while(1):
-        url = 'http://www.douban.com/tag/' + urllib.quote(book_tag) + 'book?start=' + str(page_num * 15)
-        req = requests.get(url,headers = hds[page_num%len(hds)])
-        req.encoding = 'utf-8'
-        html = req.text
-        book_list = parse_data(html)
-        book_lists.append(book_list)
-        page_num+=1
-    return book_lists
+from multiprocessing.pool import Pool
+
+groups = (['心理', '判断与决策', '算法', '数据结构', '经济', '历史'])
+if __name__ == '__main__':
+    keyword_list = ['心理', '判断与决策', '算法', '数据结构', '经济', '历史']
+    # main(keyword_list)
+    pool = Pool()
+    # groups = (keyword_list)
+    pool.map(main,keyword_list)
+    pool.close()
+    pool.join()
 
 
-def parse_data(html):
-    book_list = []
-    soup = BeautifulSoup(html)
-    list_soup = soup.find('div',class_='mod book_list')
-    for book_info in list_soup.findAll('dd'):
-        title = book_info.find('a', {'class': 'title'}).string.strip()
-        desc = book_info.find('div', {'class': 'desc'}).string.strip()
-        desc_list = desc.split('/')
-        book_url = book_info.find('a', {'class': 'title'}).get('href')
-
-        try:
-            author_info = '作者/译者： ' + '/'.join(desc_list[0:-3])
-        except:
-            author_info = '作者/译者： 暂无'
-        try:
-            pub_info = '出版信息： ' + '/'.join(desc_list[-3:])
-        except:
-            pub_info = '出版信息： 暂无'
-        try:
-            rating = book_info.find('span', {'class': 'rating_nums'}).string.strip()
-        except:
-            rating = '0.0'
-        book_list.append([title, rating, author_info, pub_info])
-    return book_list
